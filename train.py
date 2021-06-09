@@ -25,7 +25,7 @@ import torch.optim as optim
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
-    parser.add_argument("--batch_size", type=int, default=8, help="size of each image batch")
+    parser.add_argument("--batch_size", type=int, default=10, help="size of each image batch")
     parser.add_argument("--gradient_accumulations", type=int, default=2, help="number of gradient accums before step")
     parser.add_argument("--model_def", type=str, default="config/yolov3.cfg", help="path to model definition file")
     parser.add_argument("--data_config", type=str, default="config/coco.data", help="path to data config file")
@@ -34,17 +34,22 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
     parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between saving model weights")
     parser.add_argument("--evaluation_interval", type=int, default=1, help="interval evaluations on validation set")
-    parser.add_argument("--compute_map", default=False, help="if True computes mAP every tenth batch")
+    # parser.add_argument("--compute_map", default=False, help="if True computes mAP every tenth batch")
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
+    parser.add_argument("--lab_name", type=str, default='demo', help="Experiments name to specify each other")
     opt = parser.parse_args()
     print(opt)
+    # make directories if not exists
+    log_path = os.path.join("logs", opt.lab_name)
+    output_path = os.path.join("output", opt.lab_name)
+    checkpoints_path = os.path.join("checkpoints", opt.lab_name)
+    os.makedirs(log_path, exist_ok=True)
+    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(checkpoints_path, exist_ok=True)
 
-    logger = Logger("logs")
+    logger = Logger(log_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    os.makedirs("output", exist_ok=True)
-    os.makedirs("checkpoints", exist_ok=True)
 
     # Get data configuration
     data_config = parse_data_config(opt.data_config)
@@ -175,4 +180,4 @@ if __name__ == "__main__":
             print(f"---- mAP {AP.mean()}")
 
         if epoch % opt.checkpoint_interval == 0:
-            torch.save(model.state_dict(), f"checkpoints/yolov3_ckpt_%d.pth" % epoch)
+            torch.save(model.state_dict(), f"{checkpoints_path}/yolov3_ckpt_%d.pth" % epoch)
