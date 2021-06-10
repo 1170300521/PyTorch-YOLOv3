@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+import torchvision
 
 from utils.parse_config import *
 from utils.utils import build_targets, to_cpu, non_max_suppression
@@ -86,7 +87,7 @@ def create_modules(module_defs):
 class Upsample(nn.Module):
     """ nn.Upsample is deprecated """
 
-    def __init__(self, scale_factor, mode="nearest"):
+    def __init__(self, scale_factor=2, mode="nearest"):
         super(Upsample, self).__init__()
         self.scale_factor = scale_factor
         self.mode = mode
@@ -142,7 +143,6 @@ class YOLOLayer(nn.Module):
         self.img_dim = img_dim
         num_samples = x.size(0)
         grid_size = x.size(2)
-
         prediction = (
             x.view(num_samples, self.num_anchors, self.num_classes + 5, grid_size, grid_size)
             .permute(0, 1, 3, 4, 2)
@@ -345,3 +345,139 @@ class Darknet(nn.Module):
                 conv_layer.weight.data.cpu().numpy().tofile(fp)
 
         fp.close()
+
+
+class ResNet(nn.Module):
+    def __init__(self, backbone='resnet50', img_size=416):
+        super(ResNet, self).__init__()
+        self.img_size = img_size
+        self.seen = 0
+        self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+        backbone = getattr(torchvision.models, backbone)(pretrained=True)
+        return_dict = {"layer2": "0", "layer3": "1", "layer4": "2"}
+        self.body = torchvision.models._utils.IntermediateLayerGetter(backbone, return_dict)
+        self.anchors = [
+            [(10,13),  (16,30),  (33,23)],  
+            [(30,61),  (62,45),  (59,119)],  
+            [(116,90),  (156,198),  (373,326)]
+        ]
+        self.conv_set0 = nn.Sequential(
+            nn.Conv2d(512+128, 128, 1, 1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(128, 256, 3, 1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 128, 1, 1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(128, 256, 3, 1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 128, 1, 1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1)
+        )
+        self.conv_set1 = nn.Sequential(
+            nn.Conv2d(1024+256, 256, 1, 1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 512, 3, 1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 256, 1, 1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 512, 3, 1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 256, 1, 1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1)
+        )
+        self.conv_set2 = nn.Sequential(
+            nn.Conv2d(2048, 512, 1, 1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 1024, 3, 1, padding=1),
+            nn.BatchNorm2d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(1024, 512, 1, 1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 1024, 3, 1, padding=1),
+            nn.BatchNorm2d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(1024, 512, 1, 1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1)
+        )
+        self.predict0 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, 1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 255, 1, 1),
+            nn.BatchNorm2d(255),
+        )
+        self.yolo0 = YOLOLayer(self.anchors[0], 80, img_size)
+        self.predict1 = nn.Sequential(
+            nn.Conv2d(256, 512, 3, 1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 255, 1, 1),
+            nn.BatchNorm2d(255),
+        )
+        self.yolo1 = YOLOLayer(self.anchors[1], 80, img_size)
+        self.predict2 = nn.Sequential(
+            nn.Conv2d(512, 1024, 3, 1, padding=1),
+            nn.BatchNorm2d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(1024, 255, 1, 1),
+            nn.BatchNorm2d(255),
+        )
+        self.yolo2 = YOLOLayer(self.anchors[2], 80, img_size)
+        self.concat21 = nn.Sequential(
+            nn.Conv2d(512, 256, 1, 1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            Upsample(),
+        )
+        self.concat10 = nn.Sequential(
+            nn.Conv2d(256, 128, 1, 1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1),
+            Upsample(),
+        )
+        self.yolo_layers = [self.yolo2, self.yolo1, self.yolo0]
+    def forward(self, x, target=None):
+        yolo_outputs = []
+        loss = 0
+        x = self.body(x)
+        x2 = x['2']
+        x1 = x['1']
+        x0 = x['0']
+        
+        x2 = self.conv_set2(x2)
+        pred2 = self.predict2(x2)
+        pred2, layer_loss = self.yolo2(pred2, targets=target, img_dim=self.img_size)
+        yolo_outputs.append(pred2)
+        loss += layer_loss
+        x2 = self.concat21(x2)
+        x1 = torch.cat([x1, x2], 1)
+
+        x1 = self.conv_set1(x1)
+        pred1 = self.predict1(x1)
+        pred1, layer_loss = self.yolo1(pred1, targets=target, img_dim=self.img_size)
+        yolo_outputs.append(pred1)
+        loss += layer_loss
+        x1 = self.concat10(x1)
+        x0 = torch.cat([x0, x1], 1)
+        
+        x0 = self.conv_set0(x0)
+        pred0 = self.predict0(x0)
+        pred0, layer_loss = self.yolo0(pred0, targets=target, img_dim=self.img_size)
+        yolo_outputs.append(pred0)
+        loss += layer_loss
+
+        yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
+        return yolo_outputs if target is None else (loss, yolo_outputs)

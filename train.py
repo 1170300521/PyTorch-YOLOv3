@@ -37,6 +37,7 @@ if __name__ == "__main__":
     # parser.add_argument("--compute_map", default=False, help="if True computes mAP every tenth batch")
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
     parser.add_argument("--lab_name", type=str, default='demo', help="Experiments name to specify each other")
+    parser.add_argument('--backbone', type=str, default='darknet53', help="Visual backbone yolo use")
     opt = parser.parse_args()
     print(opt)
     # make directories if not exists
@@ -58,8 +59,11 @@ if __name__ == "__main__":
     class_names = load_classes(data_config["names"])
 
     # Initiate model
-    model = Darknet(opt.model_def).to(device)
-    model.apply(weights_init_normal)
+    if opt.backbone == 'darknet53':
+        model = Darknet(opt.model_def).to(device)
+        model.apply(weights_init_normal)
+    else:
+        model = ResNet(opt.backbone, opt.img_size).to(device)
 
     # If specified we start from checkpoint
     if opt.pretrained_weights:
